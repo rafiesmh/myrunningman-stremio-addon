@@ -76,5 +76,6 @@ builder.defineStreamHandler(async (args) => {
     return { streams: [] };
 });
 
-serveHTTP(builder.getInterface(), { port: 7001 });
-console.log("Stremio Addon running at http://127.0.0.1:7001/manifest.json");
+const PORT = process.env.PORT || 7001;
+serveHTTP(builder.getInterface(), { port: PORT });
+console.log(`Stremio Addon running on port ${PORT}`);
