@@ -77,5 +77,10 @@ builder.defineStreamHandler(async (args) => {
 });
 
 const PORT = process.env.PORT || 7001;
-serveHTTP(builder.getInterface(), { port: PORT });
+
+serveHTTP(builder.getInterface(), { 
+    port: PORT,
+    host: "0.0.0.0" 
+});
+
 console.log(`Stremio Addon running on port ${PORT}`);
