@@ -1,23 +1,8 @@
-const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const express = require("express");
 const axios = require("axios");
 
-// Real-Debrid API Key setup
-const RD_API_KEY = process.env.RD_API_KEY || ""; // You can set this in Render environment variables
-
-const manifest = {
-    id: "org.myrunningman.addon",
-    version: "1.0.2",
-    name: "MyRunningMan Scraper",
-    description: "Fetches streams directly from MyRunningMan.com",
-    icon: "https://myrunningman.com/assets/img/appstore.png",
-    background: "https://myrunningman.com/assets/epimg/817_temp.jpg",
-    resources: ["stream"],
-    types: ["series", "tv"],
-    idPrefixes: ["tt"],
-    catalogs: []
-};
-
-const builder = new addonBuilder(manifest);
+const app = express();
+const PORT = process.env.PORT || 7001;
 
 const TRACKERS = [
     "udp://tracker.moeking.me:6969/announce",
@@ -64,7 +49,8 @@ async function resolveRealDebridLink(magnetUrl, apiKey) {
     return null;
 }
 
-async function scrapeMyRunningMan(episodeNum) {
+// Scraper function
+async function scrapeMyRunningMan(episodeNum, rdApiKey) {
     const url = `https://myrunningman.com/ep/${episodeNum}`;
     console.log(`[Scraper] Fetching streams for Episode: ${episodeNum}`);
 
@@ -86,9 +72,8 @@ async function scrapeMyRunningMan(episodeNum) {
             const hash = uniqueHashes[index];
             const magnetUrl = `magnet:?xt=urn:btih:${hash}${TRACKERS}`;
 
-            if (RD_API_KEY) {
-                // Resolve magnet via Real-Debrid into direct HTTPS video link
-                const httpUrl = await resolveRealDebridLink(magnetUrl, RD_API_KEY);
+            if (rdApiKey) {
+                const httpUrl = await resolveRealDebridLink(magnetUrl, rdApiKey);
                 if (httpUrl) {
                     streams.push({
                         name: "MyRunningMan [RD+]",
@@ -100,7 +85,7 @@ async function scrapeMyRunningMan(episodeNum) {
                 }
             }
 
-            // Fallback to raw magnet if no Real-Debrid key is provided or resolution fails
+            // Fallback to P2P magnet link if no key or unrestrict fails
             streams.push({
                 name: "MyRunningMan",
                 title: `Running Man - Ep ${episodeNum}\nOption ${index + 1}`,
@@ -117,16 +102,89 @@ async function scrapeMyRunningMan(episodeNum) {
     }
 }
 
-builder.defineStreamHandler(async (args) => {
-    const idParts = args.id.split(":");
-    if (idParts.length >= 3) {
-        const episodeNum = idParts[2];
-        const streams = await scrapeMyRunningMan(episodeNum);
-        return { streams };
-    }
-    return { streams: [] };
+// Enable CORS for Stremio/Nuvio requests
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    next();
 });
 
-const PORT = process.env.PORT || 7001;
-serveHTTP(builder.getInterface(), { port: PORT, host: "0.0.0.0" });
-console.log(`Stremio Addon running on port ${PORT}`);
+// HTML Configuration Page (Base Route)
+app.get("/", (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>MyRunningMan Stremio Addon</title>
+            <style>
+                body { font-family: Arial, sans-serif; background: #111; color: #fff; text-align: center; padding: 50px; }
+                .card { background: #222; max-width: 400px; margin: 0 auto; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+                input { width: 90%; padding: 10px; margin: 15px 0; border-radius: 5px; border: 1px solid #444; background: #333; color: #fff; }
+                button { background: #6c5ce7; color: #fff; border: none; padding: 12px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; width: 95%; }
+                button:hover { background: #5a4bcf; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>MyRunningMan Addon</h2>
+                <p>Enter your Real-Debrid API Key below to enable high-speed HTTPS streams in Stremio and Nuvio.</p>
+                <input type="text" id="rdKey" placeholder="Real-Debrid API Key (Optional)">
+                <button onclick="installAddon()">Install to Stremio</button>
+            </div>
+            <script>
+                function installAddon() {
+                    const key = document.getElementById('rdKey').value.trim();
+                    let url = window.location.origin;
+                    if (key) {
+                        url += '/rd_api_key=' + encodeURIComponent(key);
+                    }
+                    url += '/manifest.json';
+                    window.location.href = 'stremio://' + url.replace(/^https?:\\/\\//, '');
+                }
+            </script>
+        </body>
+        </html>
+    `);
+});
+
+// Manifest Endpoints (Supports optional /rd_api_key=YOUR_KEY prefix)
+const getManifest = () => ({
+    id: "org.myrunningman.addon",
+    version: "1.0.3",
+    name: "MyRunningMan Scraper",
+    description: "Fetches magnet & Debrid streams directly from MyRunningMan.com",
+    icon: "https://myrunningman.com/assets/img/appstore.png",
+    background: "https://myrunningman.com/assets/epimg/817_temp.jpg",
+    resources: ["stream"],
+    types: ["series", "tv"],
+    idPrefixes: ["tt"],
+    catalogs: [],
+    behaviorHints: { configurable: true }
+});
+
+app.get("/manifest.json", (req, res) => res.json(getManifest()));
+app.get("/rd_api_key=:key/manifest.json", (req, res) => res.json(getManifest()));
+
+// Stream Handler Endpoints
+app.get("/stream/:type/:id.json", async (req, res) => {
+    const idParts = req.params.id.split(":");
+    let streams = [];
+    if (idParts.length >= 3) {
+        streams = await scrapeMyRunningMan(idParts[2], null);
+    }
+    res.json({ streams });
+});
+
+app.get("/rd_api_key=:key/stream/:type/:id.json", async (req, res) => {
+    const rdApiKey = req.params.key;
+    const idParts = req.params.id.split(":");
+    let streams = [];
+    if (idParts.length >= 3) {
+        streams = await scrapeMyRunningMan(idParts[2], rdApiKey);
+    }
+    res.json({ streams });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Addon running on port ${PORT}`);
+});
